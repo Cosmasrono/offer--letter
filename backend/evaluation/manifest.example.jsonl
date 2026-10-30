@@ -1,0 +1,2 @@
+{"id":"sample-genuine-001","path":"real_uk_logistics.pdf","label":"GENUINE","dataset":"synthetic","label_source":"Fictional repository test fixture","country":"GB","kind":"letter"}
+{"id":"sample-scam-001","path":"fake_dubai_mpesa.pdf","label":"SCAM","dataset":"synthetic","label_source":"Fictional repository test fixture","country":"AE","kind":"letter"}

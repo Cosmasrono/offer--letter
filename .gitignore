@@ -1,0 +1,15 @@
+# Python
+backend/.venv/
+__pycache__/
+*.pyc
+backend/.env
+backend/evaluation/private/
+backend/evaluation/results/
+backend/data/*.source.html
+backend/data/*.tmp
+
+# Node (frontend has its own .gitignore too)
+node_modules/
+frontend/.env
+
+.DS_Store

@@ -1,0 +1,156 @@
+// MongoDB via Prisma. Prisma ORM 6.x is used because it fully supports MongoDB.
+// After editing this file run:  npx prisma db push   (MongoDB has no migrations)
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/@offer-checker/prisma-client-v2"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String    @id @default(auto()) @map("_id") @db.ObjectId
+  email        String    @unique // stored lower-case
+  name         String?
+  passwordHash String? // scrypt, see lib/password.ts
+  role         String    @default("USER") // USER | ADMIN (admins are listed in ADMIN_EMAILS)
+  reports      Report[]
+  sessions     Session[]
+  createdAt    DateTime  @default(now())
+}
+
+// Signed-in browsers. The cookie holds a random token; only its SHA-256 hash is stored, so a database leak
+// doesn't hand out working sessions. Deleting the row signs that browser out.
+model Session {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  tokenHash String   @unique
+  userId    String   @db.ObjectId
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+// Failed sign-ins and sign-ups, used for rate limiting. Old rows are deleted as new ones are written.
+model AuthAttempt {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  key       String // e.g. "signin-email:<email>", "signin-ip:<ip>", "signup-ip:<ip>"
+  createdAt DateTime @default(now())
+
+  @@index([key, createdAt])
+  @@index([createdAt])
+}
+
+model Report {
+  id               String    @id @default(auto()) @map("_id") @db.ObjectId
+  fileName         String
+  kind             String? // letter | message | visa (missing on older reports = letter)
+  riskLevel        String // LOW | MEDIUM | HIGH
+  score            Int
+  country          String?
+  countryName      String?
+  companyName      String?
+  jobTitle         String?
+  summary          String
+  findings         Json
+  advice           String[]
+  verifyLinks      Json
+  entities         Json
+  textExcerpt      String
+  extractionMethod String
+  aiUsed           Boolean
+  warnings         String[]
+  checksNotRun     String[]
+  sourceChecks     Json? // Source, outcome, retrieval date and registry record; never proof the offer is authentic
+  visa             Json? // Reviewed/extracted visa fields, comparison and official guidance; expires with the report.
+  fingerprint      Json? // MinHash of the wording, see backend/app/fingerprint.py
+  userReportedAt   DateTime? // set when a user pressed "Report as scam"
+  scamStatus       String? // UNREVIEWED | SUSPECTED_SCAM | REPORTED_SCAM | CONFIRMED_SCAM | CLEARED
+  baseRiskLevel    String? // risk before database-memory matching, to avoid circular reinforcement
+  baseScore        Int?
+  memoryAutoEligible Boolean? // only independently HIGH-risk scans contribute automatic memory
+  memoryIndicatorKeys String[] @default([])
+  memoryBands      String[] @default([])
+  memoryIndexedAt  DateTime?
+  memoryMatches    Json?
+  reviewVersion    Int?
+  reviewNote       String?
+  reviewedAt       DateTime?
+  reviewedById     String? @db.ObjectId
+  reviewHistory    Json? // decision history with reviewer and previous/new status
+  userId           String?   @db.ObjectId
+  user             User?     @relation(fields: [userId], references: [id])
+  createdAt        DateTime  @default(now())
+
+  consentVersion     String?
+  consentedAt        DateTime?
+  memoryConsent      Boolean?
+  managementTokenHash String? // Browser-held secret; unrelated to public URLs and paid download tokens.
+  expiresAt          DateTime? // TTL index installed by ensureReportRetention; absent on legacy reports.
+
+  @@index([createdAt])
+  @@index([riskLevel])
+  @@index([scamStatus, createdAt])
+  @@index([memoryIndicatorKeys])
+  @@index([memoryBands])
+}
+
+// Legacy aggregate memory retained for compatibility. New matching uses per-report status and memory keys,
+// so dismissed cases can be excluded without leaving irreversible aggregate counts.
+model ScamIndicator {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  type        String // EMAIL | PHONE | PAYMENT
+  value       String   @unique
+  country     String?
+  reports     Int      @default(1) // letters this checker rated HIGH risk
+  userReports Int? // letters users reported as scams (not yet confirmed); missing on older records
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// Wording fingerprints of scam letters, so a reused template is caught even when names and numbers change.
+model ScamTemplate {
+  id              String   @id @default(auto()) @map("_id") @db.ObjectId
+  signature       Int[]
+  bands           String[]
+  country         String?
+  reports         Int      @default(0) // letters this checker rated HIGH risk
+  userReports     Int      @default(0) // letters users reported as scams (not yet confirmed)
+  exampleReportId String?  @db.ObjectId
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([bands])
+}
+
+// M-Pesa payments (via PayHero).
+// CHECK: legacy unused credits from the old pay-before-scanning flow are still honoured.
+// REPORT: payment after scanning, required to reveal findings and download the PDF.
+model Payment {
+  id                String    @id @default(auto()) @map("_id") @db.ObjectId
+  purpose           String    @default("REPORT") // CHECK | REPORT
+  reportId          String?   @db.ObjectId
+  userId            String?   @db.ObjectId // set when the payer was signed in, so they can download on any device
+  phone             String // 07XXXXXXXX
+  amount            Int // KES
+  status            String // PENDING | SUCCESS | FAILED
+  externalReference String    @unique // our reference, sent to PayHero
+  providerReference String? // PayHero's "reference", used to check the status
+  checkoutRequestId String?
+  mpesaReceipt      String?
+  failureReason     String?
+  // Secret handed to the payer's browser once paid; it unlocks the download. Not @unique: MongoDB would
+  // treat every unpaid payment's missing token as a duplicate.
+  downloadToken     String?
+  lastCheckedAt     DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([reportId])
+  @@index([phone, createdAt])
+  @@index([downloadToken])
+}
